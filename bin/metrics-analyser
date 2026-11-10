@@ -1,0 +1,200 @@
+#!/usr/bin/env python3
+
+"""
+Visualise build system metrics files.
+"""
+
+from argparse import ArgumentParser, Namespace
+from collections import defaultdict
+from pathlib import Path
+
+import matplotlib as mpl
+import matplotlib.pyplot as plt
+import pandas
+import seaborn as sns
+from matplotlib.axes import Axes
+
+
+def staircase_plot(
+    df: pandas.DataFrame, title, ax: Axes, colours_name: str = "tab10"
+) -> None:
+    """Staircase plot of events over time."""
+
+    colour_map = mpl.color_sequences[colours_name]
+
+    # Convert values into suitable horizontal bar coordinates.
+    # Patterns are used to differentiate internal event types
+    y, x, width, colours, hatching = [], [], [], [], []
+
+    for i, timestamp in enumerate(df.index):
+        value = df.iloc[i]
+        if value.Process.startswith("WorkerProcess-"):
+            task = int(value.Process.split("-")[-1])
+        else:
+            continue
+        if value.Task == "__queue":
+            hatching.append("/")
+        else:
+            hatching.append("")
+
+        y.append(i)
+        x.append(timestamp)
+        width.append(float(value.Elapsed))
+        colours.append(colour_map[task % len(colour_map)])
+
+    # Create and customise the bar chart
+    ax.barh(y, width=width, left=x, color=colours, hatch=hatching)
+    ax.set_xlabel("Time (s)")
+    ax.set_ylabel("Task")
+    ax.invert_yaxis()
+    ax.set_title(title)
+
+
+def task_time_plot(df: pandas.DataFrame, ax: Axes, percentage: float = 5.0):
+    """Pie chart showing time spent on each action."""
+
+    # Sum elapsed times by task
+    elapsed = df.groupby(["Task"]).Elapsed.sum()
+    limit = (df.index[-1] / 100.0) * percentage
+
+    # Combine tasks below the target threshold into a group called Other
+    other = elapsed[elapsed < limit].sum()
+    values = elapsed[elapsed >= limit]
+    values.at["Other"] = other
+    values.sort_values(inplace=True)
+
+    # Plot the values as a pie chart
+    ax.pie(values, labels=values.index)
+    ax.set_title("Tasks by Elapsed Time")
+
+
+def parallel_process_heatmap(process: pandas.DataFrame, ax: Axes) -> None:
+    """Heatmap of process activity over time."""
+
+    # Create a heatmap from a dataframe containing task time count
+    sns.heatmap(process, cmap="crest", ax=ax)
+    ax.set_xlabel("Time (s)")
+    ax.set_ylabel("Task ID")
+    ax.set_title("Parallelism Heatmap")
+
+
+def performance_plot(process: pandas.DataFrame, ax: Axes) -> None:
+    """Overall process performance."""
+
+    usage = 100.0 * (process.sum() / len(process))
+    usage.plot(ax=ax)
+    ax.set_xlabel("Time (s)")
+    ax.set_ylabel("Activity %")
+    ax.set_title("Overall Performance")
+
+
+def load_dataframes(
+    filename: Path, skip_reuse: bool
+) -> tuple[pandas.DataFrame, pandas.DataFrame]:
+    """Load the CSV values into sensible DataFrames.
+
+    Load the metrics data into a pandas.DataFrame, order by absolute
+    start time, and remap the index into elapsed time from the start
+    of the run.  The data is split into system and user events
+    depending on whether it starts with a double underscore.
+    """
+
+    # Load the data and set the index to time elapsed from first event
+    df = pandas.read_csv(filename, index_col=[0], header=0, comment="#").sort_index()
+    df = df.set_index(df.index - df.index[0])
+
+    # Create a mask to separate internal events from user events
+    mask = df.Task.str.startswith("__")
+    system = df[mask]
+    user = df[~mask]
+
+    if skip_reuse:
+        # Filter out user Actions which have set a reused flag
+        user = user[user.Reused == False]
+
+    return system, user
+
+
+def process_timeseries(df: pandas.DataFrame) -> pandas.DataFrame:
+    """Convert descrete events into a continuous time series."""
+
+    # Task dictionary points to lists of activity values for each second
+    seconds = round(df.index[-1] + df.iloc[-1].Elapsed) + 1
+    tasks = defaultdict(lambda: [0.0] * seconds)
+
+    for value in df.itertuples():
+        # Identify the task and associated data array
+        if value.Process.startswith("WorkerProcess-"):
+            name = value.Process.split("-")[-1]
+        else:
+            name = value.Process
+        totals = tasks[name]
+
+        # Convert each entry in the data table into a block of time.
+        # Remainders are used as partial contributions to the start
+        # and end
+        start, srest = divmod(value.Index, 1.0)
+        end, erest = divmod(value.Index + value.Elapsed, 1.0)
+
+        if start == end:
+            totals[int(start)] += erest - srest
+            continue
+
+        for i in range(int(start), int(end)):
+            if i == start:
+                totals[i] += 1 - srest
+            else:
+                totals[i] += 1
+        totals[int(end)] += erest
+
+    # Return the transposed data
+    return pandas.DataFrame.from_dict(tasks).T
+
+
+def process_arguments() -> Namespace:
+    """Process command line arguments."""
+
+    parser = ArgumentParser(usage="%(prog)s [options] csv", description=__doc__)
+    parser.add_argument(
+        "--skip-reuse", action="store_true", help="skip reused incremental actions"
+    )
+    parser.add_argument(
+        "--summary", action="store_true", help="show summary statistics"
+    )
+    parser.add_argument("csv", type=Path, help="metrics data in comma separated format")
+
+    return parser.parse_args()
+
+
+def main():
+    """Main function."""
+
+    args = process_arguments()
+
+    system, user = load_dataframes(args.csv, args.skip_reuse)
+    process = process_timeseries(user)
+
+    if args.summary:
+        print(user.groupby(["Task"]).Elapsed.describe())
+        print()
+        print(system.groupby(["Task"]).Elapsed.describe())
+
+    task_time_plot(user, plt.gca())
+
+    plt.figure()
+    staircase_plot(user, "Task Flow", plt.gca())
+
+    plt.figure()
+    staircase_plot(system, "Queue Wait and Barrier Events", plt.gca())
+
+    plt.figure()
+    parallel_process_heatmap(process, plt.gca())
+
+    plt.figure()
+    performance_plot(process, plt.gca())
+
+    plt.show()
+
+
+if __name__ == "__main__":
+    main()

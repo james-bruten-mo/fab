@@ -56,6 +56,13 @@ repository = 'https://github.com/MetOffice/fab'
 [tool.setuptools.packages.find]
 where = ['source']
 
+[tool.setuptools.package-data]
+"fabengine.data" = ["*.yaml"]
+
+[[tool.mypy.overrides]]
+module = ["yaml.*"]
+ignore_missing_imports = true
+
 [tool.setuptools.dynamic]
 readme = {file = 'README.rst', content-type = "text/x-rst"}
 version = {attr = 'fab.__version__'}
