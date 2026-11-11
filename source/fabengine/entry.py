@@ -295,6 +295,43 @@ def instantiate_build_script(fabfile: Path) -> BuildScript:
     raise RuntimeError("No BuildScript class found in Fabfile.")
 
 
+def pollute_configuration(configuration: WriteOnceDict) -> None:
+    """
+    Dump a lot of stuff into the configuration.
+    .. todo:: This should be handled better, and at the build script level.
+    """
+
+    configuration["fc_ignore_modules"] = [
+        "funit",
+        "pfunit",  # pFUnit
+        "mpi",
+        "mpi_f08",  # MPI
+        "netcdf",  # NetCDF
+        "omp_lib",  # OpenMP
+        "xios",
+        "icontext",
+        "mod_wait",
+        "mod_oasis",  # XIOS/OASIS
+        "yaxt",  # YAXT
+        "vernier_mod",  # Vernier
+        "c_shum_byteswap",  # ShUMlib
+    ]
+
+    configuration["field_instances"] = [
+        {"real": "real32"},
+        {"real": "real64"},
+        {"integer": "int32"},
+    ]
+
+    configuration["inclusion_suffixes"] = [".h", ".inc", ".h90"]
+
+    configuration["mock_tests"] = [
+        "lfric_xios_diag_mod_test",
+        "lfric_xios_read_mod_test",
+        "lfric_xios_write_mod_test",
+    ]
+
+
 def process_packages(
     build_script: BuildScript, library_map: list[Package], configuration: WriteOnceDict
 ) -> None:
@@ -453,37 +490,9 @@ def cli() -> None:
         configuration["extract_path"] = options.extract_archive
         configuration["two_pass_compiles"] = options.two_pass_compiles
         configuration["metrics_csv"] = options.metrics_csv
-
-        configuration["fc_ignore_modules"] = [
-            "funit",
-            "pfunit",  # pFUnit
-            "mpi",
-            "mpi_f08",  # MPI
-            "netcdf",  # NetCDF
-            "omp_lib",  # OpenMP
-            "xios",
-            "icontext",
-            "mod_wait",
-            "mod_oasis",  # XIOS/OASIS
-            "yaxt",  # YAXT
-            "vernier_mod",  # Vernier
-            "c_shum_byteswap",  # ShUMlib
-        ]
-
-        configuration["field_instances"] = [
-            {"real": "real32"},
-            {"real": "real64"},
-            {"integer": "int32"},
-        ]
-
-        configuration["inclusion_suffixes"] = [".h", ".inc", ".h90"]
-
-        configuration["mock_tests"] = [
-            "lfric_xios_diag_mod_test",
-            "lfric_xios_read_mod_test",
-            "lfric_xios_write_mod_test",
-        ]
-
         configuration["internal_psyclone"] = True
+
+        pollute_configuration(configuration)
+
         set_terminal_title(build_script.build_name)
         fab_core(configuration)
